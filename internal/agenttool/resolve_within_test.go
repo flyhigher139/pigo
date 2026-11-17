@@ -1,9 +1,14 @@
 package agenttool
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/smallnest/pigo/internal/agentcore"
 )
 
 // symlinkFixture builds target/a.txt plus a sibling symlink link → target, so
@@ -53,19 +58,64 @@ func TestResolveWithinAcceptsBothSymlinkSpellings(t *testing.T) {
 // TestResolveWithinStillRejectsEscape: the symlink-aware comparison must not
 // widen the boundary — lexical traversal and absolute paths outside the root
 // stay rejected, and so does a path that only escapes once symlinks resolve.
+// The not-yet-created cases matter because WriteTool creates missing parent
+// directories: an allowed-but-escaping path would land outside the workspace.
 func TestResolveWithinStillRejectsEscape(t *testing.T) {
 	target, link := symlinkFixture(t)
 	if err := os.Symlink("/etc", filepath.Join(target, "evil")); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	outside := filepath.Join(filepath.Dir(target), "outside.txt")
-	if _, err := resolveWithin(link, outside); err == nil {
-		t.Errorf("resolveWithin(%q) = nil, want outside-the-root error", outside)
+	// escape points back at the parent directory, which lies outside the
+	// workspace root spelled either way (root = link resolves to target).
+	escape := filepath.Join(target, "escape")
+	if err := os.Symlink(filepath.Dir(target), escape); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
 	}
-	if _, err := resolveWithin(link, "../../etc/passwd"); err == nil {
-		t.Errorf("lexical traversal must stay rejected")
+	outsideFile := filepath.Join(filepath.Dir(target), "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("out"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := resolveWithin(link, filepath.Join(link, "evil", "passwd")); err == nil {
-		t.Errorf("symlink-assisted escape must be rejected")
+
+	rejected := map[string]string{
+		"absolute path outside":        outsideFile,
+		"lexical traversal":            "../../etc/passwd",
+		"symlink to /etc, existing":    filepath.Join(link, "evil", "passwd"),
+		"escape link, existing target": filepath.Join(escape, "outside.txt"),
+		// The not-yet-created escape: only the deepest-existing-ancestor walk
+		// catches these; a one-level parent check judges them "inside".
+		"escape link, new nested file": filepath.Join(escape, "sub", "new.txt"),
+		"escape link, new top file":    filepath.Join(escape, "fresh.txt"),
+	}
+	for name, p := range rejected {
+		if _, err := resolveWithin(link, p); err == nil {
+			t.Errorf("%s: resolveWithin(%q) = nil, want outside-the-root error", name, p)
+		}
+	}
+}
+
+// TestWriteToolCannotEscapeThroughSymlink pins the exploit path end to end:
+// WriteTool creates missing parent directories, so a guard that only rejects
+// already-existing escapes would still land a new file outside the workspace.
+func TestWriteToolCannotEscapeThroughSymlink(t *testing.T) {
+	target, _ := symlinkFixture(t)
+	escape := filepath.Join(target, "escape")
+	if err := os.Symlink(filepath.Dir(target), escape); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	tool := &WriteTool{Root: target, Snap: NewFileSnapshotRecorder()}
+	args, err := json.Marshal(map[string]string{
+		"path":    filepath.Join("escape", "sub", "new.txt"),
+		"content": "escaped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, _ := tool.Execute(context.Background(), "call-1", args, nil)
+	if text := agentcore.ContentToText(res.Content); !strings.Contains(text, "outside the workspace root") {
+		t.Errorf("write result = %q, want an outside-the-workspace-root rejection", text)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(target), "sub", "new.txt")); !os.IsNotExist(err) {
+		t.Errorf("escape landed: file exists outside the workspace")
 	}
 }

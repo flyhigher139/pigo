@@ -33,9 +33,9 @@ const searchMaxResults = 1000
 // same workspace, and on macOS the OS itself reports physical paths
 // (os.Getwd), so the model may legitimately name either spelling. A candidate
 // is resolved physically through itself when it exists, or through its deepest
-// existing ancestor for a not-yet-created file; only when neither resolves
-// (a path into directories that do not exist yet) does the comparison fall
-// back to the lexical spellings.
+// existing ancestor for a not-yet-created file; only when nothing resolves
+// (a path into directories that do not exist yet, below an unresolvable root)
+// does the comparison fall back to the lexical spellings.
 func resolveWithin(root, p string) (string, error) {
 	if root == "" {
 		wd, err := os.Getwd()
@@ -67,8 +67,32 @@ func resolveWithin(root, p string) (string, error) {
 	resolved := false
 	if r, err := filepath.EvalSymlinks(full); err == nil {
 		cmpFull, resolved = r, true
-	} else if parent, perr := filepath.EvalSymlinks(filepath.Dir(full)); perr == nil {
-		cmpFull, resolved = filepath.Join(parent, filepath.Base(full)), true
+	} else {
+		// The candidate does not exist yet (a write to a new file). Walk up to
+		// the deepest existing ancestor, resolve it physically, and re-attach
+		// the not-yet-existing tail lexically: a path that only escapes through
+		// a symlink must be rejected here, because WriteTool creates the
+		// missing parents — an allowed-but-escaping path would land outside
+		// the workspace. Stopping at filepath.Dir(full) is not enough: that
+		// directory may itself be a not-yet-created child of an escaping link.
+		prefix := full
+		var tail []string
+		for {
+			parent := filepath.Dir(prefix)
+			if parent == prefix {
+				break // filesystem root reached with nothing to resolve against
+			}
+			tail = append([]string{filepath.Base(prefix)}, tail...)
+			prefix = parent
+			if _, err := os.Stat(prefix); err != nil {
+				continue
+			}
+			if r, perr := filepath.EvalSymlinks(prefix); perr == nil {
+				cmpFull = filepath.Join(append([]string{r}, tail...)...)
+				resolved = true
+			}
+			break
+		}
 	}
 	rel, err := filepath.Rel(absRoot, full)
 	if resolved {

@@ -40,6 +40,14 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
+- **File tools no longer follow symlinks that point outside the workspace
+  root**: the shared path guard now compares symlink-resolved paths, so a
+  workspace symlink escaping the project (a linked checkout, a shared assets
+  directory, a `node_modules` link) is rejected with "path ... is outside the
+  workspace root" where previous releases silently followed it. The boundary
+  is now enforced consistently for CLI and SDK sessions; setups relying on
+  such links should replace the link with a real directory (or a bind mount).
+  (#1)
 - **`pigo update` semantics**: a no-argument `pigo update` no longer updates
   every installed package; it now self-updates the binary. Update packages
   individually with `pigo update <name>`. (#468)
