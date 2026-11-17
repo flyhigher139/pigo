@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/cli/run"
@@ -51,6 +54,16 @@ func New(opts ...Option) (*Session, error) {
 	// always wins over allow inside run.ApplyToolPolicy.
 	policy := run.NewToolPolicy(c.allowedTools, c.disallowedTools)
 
+	// Resolve the session working directory up front: an explicit WithWorkingDir
+	// is normalized to an absolute path and validated to be an existing
+	// directory, so a configuration mistake fails here rather than surfacing as
+	// a tool error on the first Prompt. Empty keeps the process working
+	// directory (SetupEnv falls back to os.Getwd).
+	workingDir, err := resolveWorkingDir(c.workingDir)
+	if err != nil {
+		return nil, err
+	}
+
 	// SetupEnv resolves the provider, assembles the (policy-filtered) tool set,
 	// builds the system prompt, and — because skills/memory are opt-in here —
 	// leaves the machine's shared state untouched unless WithSkills/WithMemory
@@ -59,6 +72,7 @@ func New(opts ...Option) (*Session, error) {
 	env, err := run.SetupEnv(
 		c.model, c.baseURL, c.protocol, c.provider, c.apiKey,
 		c.noTools, !c.skills, c.systemPrompt, c.appendSystemPrompt, c.memory, policy,
+		workingDir,
 	)
 	if err != nil {
 		return nil, err
@@ -98,6 +112,28 @@ func New(opts ...Option) (*Session, error) {
 		},
 		model: c.model,
 	}, nil
+}
+
+// resolveWorkingDir validates an explicit WithWorkingDir value: the path must
+// exist and be a directory, and is returned absolute so tool roots and the
+// system prompt agree regardless of how the caller expressed it. An empty
+// value means "process working directory" and passes through untouched.
+func resolveWorkingDir(dir string) (string, error) {
+	if dir == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory %q: %w", dir, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("working directory %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("working directory %q is not a directory", dir)
+	}
+	return abs, nil
 }
 
 func structuredStreamHandler(onEvent func(Event)) runtime.StreamHandler {

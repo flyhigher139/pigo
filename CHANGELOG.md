@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **SDK per-session working directory**: `agent.WithWorkingDir(dir)` roots a
+  session at an existing directory instead of the process cwd — the built-in
+  file tools bound their workspace there, bash runs there, and the system
+  prompt's Environment block and AGENTS.md discovery anchor there. Task
+  sub-agents inherit the same root, so concurrent sessions can each work in
+  their own checkout directory. The directory is validated at `agent.New`;
+  omitting the option keeps the previous behavior. (#1)
 - **Tool-level admission control**: `--allowed-tools` / `--disallowed-tools`
   (repeatable, comma-separated, case-insensitive) narrow the tool set handed to
   the model, filling the gap between the full set and `--no-tools`. Deny wins

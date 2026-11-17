@@ -19,6 +19,7 @@ type config struct {
 	customTools        []Tool
 	skills             bool
 	memory             bool
+	workingDir         string
 }
 
 // Option configures a Session at construction time. Options are applied in the
@@ -134,4 +135,16 @@ func WithSkills() Option {
 // asked.
 func WithMemory() Option {
 	return func(c *config) { c.memory = true }
+}
+
+// WithWorkingDir roots the session at dir instead of the process working
+// directory: the built-in file tools (read, write, edit, grep, find) bound
+// their workspace at dir, bash runs with dir as its working directory, and
+// the system prompt's Environment block and AGENTS.md discovery anchor
+// there. Task sub-agents spawned during the run inherit the same root. dir
+// must be an existing directory; an empty value (the default) keeps the
+// process working directory. Use this to isolate concurrent sessions — for
+// example one checkout directory per task in a multi-tenant agent service.
+func WithWorkingDir(dir string) Option {
+	return func(c *config) { c.workingDir = dir }
 }
