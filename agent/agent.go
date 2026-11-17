@@ -115,9 +115,11 @@ func New(opts ...Option) (*Session, error) {
 }
 
 // resolveWorkingDir validates an explicit WithWorkingDir value: the path must
-// exist and be a directory, and is returned absolute so tool roots and the
-// system prompt agree regardless of how the caller expressed it. An empty
-// value means "process working directory" and passes through untouched.
+// exist and be a directory, and is returned as the canonical physical path
+// (absolute, symlinks resolved) so tool roots and the system prompt agree with
+// what the OS reports — os.Getwd, the source of the CLI's root, resolves
+// symlinks, and resolveWithin compares physical forms. An empty value means
+// "process working directory" and passes through untouched.
 func resolveWorkingDir(dir string) (string, error) {
 	if dir == "" {
 		return "", nil
@@ -132,6 +134,9 @@ func resolveWorkingDir(dir string) (string, error) {
 	}
 	if !info.IsDir() {
 		return "", fmt.Errorf("working directory %q is not a directory", dir)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 	return abs, nil
 }
@@ -208,6 +213,13 @@ func (s *Session) ToolNames() []string {
 
 // Model returns the model id the session was created with.
 func (s *Session) Model() string { return s.model }
+
+// WorkingDir returns the session's working directory: the root of the built-in
+// file tools' workspace, the bash working directory, and the anchor of the
+// system prompt's Environment block. It is the process working directory unless
+// [WithWorkingDir] set it, in which case it is the canonical (symlink-resolved)
+// form of the given directory.
+func (s *Session) WorkingDir() string { return s.env.Cwd }
 
 // Provider returns the resolved provider name (e.g. "anthropic", "openrouter"),
 // which is inferred from the model id unless WithProvider was set.

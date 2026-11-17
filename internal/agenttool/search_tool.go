@@ -27,6 +27,15 @@ const searchMaxResults = 1000
 // the single workspace-boundary policy shared by every file tool: the search
 // tools call it directly, and ReadTool/WriteTool/EditTool.resolvePath delegate
 // to it, so the path-traversal guard lives in exactly one place.
+//
+// The comparison is made on physical (symlink-resolved) forms: a root spelled
+// through a symlink (/tmp/task) and its target (/private/tmp/task) must be the
+// same workspace, and on macOS the OS itself reports physical paths
+// (os.Getwd), so the model may legitimately name either spelling. A candidate
+// is resolved physically through itself when it exists, or through its deepest
+// existing ancestor for a not-yet-created file; only when neither resolves
+// (a path into directories that do not exist yet) does the comparison fall
+// back to the lexical spellings.
 func resolveWithin(root, p string) (string, error) {
 	if root == "" {
 		wd, err := os.Getwd()
@@ -39,13 +48,32 @@ func resolveWithin(root, p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid root: %w", err)
 	}
+	cmpRoot := absRoot
+	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+		cmpRoot = resolved
+	}
 	var full string
 	if filepath.IsAbs(p) {
 		full = filepath.Clean(p)
 	} else {
 		full = filepath.Join(absRoot, p)
 	}
+	// Resolve the candidate physically when possible: itself when it exists,
+	// otherwise through its deepest existing ancestor (a write to a new file).
+	// Only when neither resolves does the comparison fall back to the lexical
+	// spellings — and that fallback is authoritative only because resolution
+	// was impossible, never a second chance after a resolved rejection.
+	cmpFull := full
+	resolved := false
+	if r, err := filepath.EvalSymlinks(full); err == nil {
+		cmpFull, resolved = r, true
+	} else if parent, perr := filepath.EvalSymlinks(filepath.Dir(full)); perr == nil {
+		cmpFull, resolved = filepath.Join(parent, filepath.Base(full)), true
+	}
 	rel, err := filepath.Rel(absRoot, full)
+	if resolved {
+		rel, err = filepath.Rel(cmpRoot, cmpFull)
+	}
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the workspace root", p)
 	}

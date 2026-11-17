@@ -65,4 +65,12 @@ func TestWithWorkingDirEmptyKeepsDefault(t *testing.T) {
 		t.Fatalf("New() = %v, want nil", err)
 	}
 	defer sess.Close()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.WorkingDir(); got != cwd {
+		t.Errorf("WorkingDir() = %q, want process cwd %q", got, cwd)
+	}
 }

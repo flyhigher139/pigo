@@ -45,11 +45,17 @@ func rootedTools(t *testing.T, sess *Session) map[string]string {
 
 // TestWithWorkingDirRootsToolSet is the core contract of issue #1: every
 // workspace-bound built-in tool, the bash working directory, and the system
-// prompt anchor at the session directory instead of the process cwd.
+// prompt anchor at the session directory instead of the process cwd. The
+// session dir is canonicalized (symlink-resolved), so expectations use the
+// canonical form — on macOS t.TempDir()'s /var path resolves to /private/var.
 func TestWithWorkingDirRootsToolSet(t *testing.T) {
 	hermetic(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("session-agents-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,18 +66,51 @@ func TestWithWorkingDirRootsToolSet(t *testing.T) {
 	defer sess.Close()
 
 	for name, root := range rootedTools(t, sess) {
-		if root != dir {
-			t.Errorf("%s tool root = %q, want session dir %q", name, root, dir)
+		if root != canonical {
+			t.Errorf("%s tool root = %q, want canonical session dir %q", name, root, canonical)
 		}
 	}
-	if got := sess.env.Cwd; got != dir {
-		t.Errorf("env.Cwd = %q, want %q", got, dir)
+	if got := sess.env.Cwd; got != canonical {
+		t.Errorf("env.Cwd = %q, want %q", got, canonical)
 	}
-	if !strings.Contains(sess.env.SysPrompt, "- Working directory: "+dir+"\n") {
-		t.Errorf("system prompt should anchor its Environment block at the session dir %q", dir)
+	if got := sess.WorkingDir(); got != canonical {
+		t.Errorf("WorkingDir() = %q, want %q", got, canonical)
+	}
+	if !strings.Contains(sess.env.SysPrompt, "- Working directory: "+canonical+"\n") {
+		t.Errorf("system prompt should anchor its Environment block at the session dir %q", canonical)
 	}
 	if !strings.Contains(sess.env.SysPrompt, "session-agents-content") {
 		t.Errorf("system prompt should include the session dir's AGENTS.md")
+	}
+}
+
+// TestWithWorkingDirCanonicalizesSymlink: a symlinked session directory roots
+// the session at the physical target — the same form the OS reports
+// (os.Getwd resolves symlinks) and the form resolveWithin compares against,
+// so neither spelling of a path is rejected by the workspace guard.
+func TestWithWorkingDirCanonicalizesSymlink(t *testing.T) {
+	hermetic(t)
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	canonical, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := New(WithWorkingDir(link))
+	if err != nil {
+		t.Fatalf("New(WithWorkingDir(%q)) = %v, want nil", link, err)
+	}
+	defer sess.Close()
+
+	if got := sess.WorkingDir(); got != canonical {
+		t.Errorf("WorkingDir() = %q, want canonical target %q", got, canonical)
+	}
+	if got := rootedTools(t, sess)["read"]; got != canonical {
+		t.Errorf("read tool root = %q, want canonical target %q", got, canonical)
 	}
 }
 
